@@ -7,9 +7,82 @@ import gzip
 import shutil
 import logging
 import logging.handlers
+import time
+from functools import wraps
 from pathlib import Path
-from typing import Optional, Union, BinaryIO
+from typing import Optional, Union, BinaryIO, Callable, Any, TypeVar
 from pythonjsonlogger import jsonlogger
+
+# Type variable for generic return type
+T = TypeVar('T')
+
+def with_retries(
+    max_attempts: int = 3,
+    initial_delay: float = 1.0,
+    max_delay: float = 30.0,
+    backoff_factor: float = 2.0,
+    logger: Optional[logging.Logger] = None
+) -> Callable:
+    """Decorator for retrying operations with exponential backoff.
+    
+    Args:
+        max_attempts: Maximum number of retry attempts
+        initial_delay: Initial delay between retries in seconds
+        max_delay: Maximum delay between retries in seconds
+        backoff_factor: Multiplier for exponential backoff
+        logger: Optional logger for retry attempts
+        
+    Returns:
+        Decorator function
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_exception = None
+            delay = initial_delay
+
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    
+                    if attempt == max_attempts - 1:
+                        # Last attempt failed
+                        if logger:
+                            logger.error(
+                                f'All retry attempts failed for {func.__name__}',
+                                extra={
+                                    'function': func.__name__,
+                                    'max_attempts': max_attempts,
+                                    'error': str(e)
+                                }
+                            )
+                        raise last_exception
+                    
+                    if logger:
+                        logger.warning(
+                            f'Retry attempt {attempt + 1}/{max_attempts} for {func.__name__}',
+                            extra={
+                                'function': func.__name__,
+                                'attempt': attempt + 1,
+                                'max_attempts': max_attempts,
+                                'delay': delay,
+                                'error': str(e)
+                            }
+                        )
+                    
+                    # Wait before next attempt
+                    time.sleep(delay)
+                    
+                    # Calculate next delay with exponential backoff
+                    delay = min(delay * backoff_factor, max_delay)
+            
+            # Should never reach here due to raise in last attempt
+            raise last_exception
+            
+        return wrapper
+    return decorator
 
 def setup_logging(
     log_file: str,

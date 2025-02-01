@@ -11,6 +11,8 @@ from typing import Optional, List, Dict, Any, Union
 from kbcstorage.client import Client
 from kbcstorage.tables import Tables
 
+from .utils import with_retries
+
 class StorageError(Exception):
     """Base exception for storage operations."""
     pass
@@ -22,7 +24,11 @@ class StorageClient:
         self,
         api_token: str,
         stack_url: str,
-        logger: logging.Logger
+        logger: logging.Logger,
+        max_retries: int = 3,
+        initial_retry_delay: float = 1.0,
+        max_retry_delay: float = 30.0,
+        retry_backoff: float = 2.0
     ):
         """Initialize the storage client.
         
@@ -30,14 +36,26 @@ class StorageClient:
             api_token: Keboola Storage API token
             stack_url: Keboola Stack endpoint URL
             logger: Logger instance for operation logging
+            max_retries: Maximum number of retry attempts
+            initial_retry_delay: Initial delay between retries in seconds
+            max_retry_delay: Maximum delay between retries in seconds
+            retry_backoff: Multiplier for exponential backoff
         """
         self.logger = logger
+        self.retry_decorator = with_retries(
+            max_attempts=max_retries,
+            initial_delay=initial_retry_delay,
+            max_delay=max_retry_delay,
+            backoff_factor=retry_backoff,
+            logger=logger
+        )
+        
         try:
             self.client = Client(api_token, stack_url)
             self.tables = Tables(api_token, stack_url)
             
             # Verify connection
-            self.client.verify_token()
+            self._verify_connection()
             self.logger.info('Storage client initialized successfully')
             
         except Exception as e:
@@ -47,6 +65,16 @@ class StorageClient:
             )
             raise StorageError(f"Storage client initialization failed: {e}")
 
+    @property
+    def _buckets(self):
+        """Get buckets API client with retries."""
+        return self.retry_decorator(self.client.buckets)()
+
+    def _verify_connection(self):
+        """Verify API token and connection."""
+        self.retry_decorator(self.client.verify_token)()
+
+    @with_retries(logger=logger)  # Use instance logger
     def bucket_exists(self, bucket_name: str, stage: str = 'in') -> bool:
         """Check if a bucket exists.
         
@@ -59,7 +87,7 @@ class StorageClient:
         """
         try:
             bucket_id = f"{stage}.c-{bucket_name}"
-            buckets = self.client.buckets().list()
+            buckets = self._buckets.list()
             return any(b['id'] == bucket_id for b in buckets)
         except Exception as e:
             self.logger.error(
@@ -72,6 +100,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to check bucket existence: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def create_bucket(
         self,
         bucket_name: str,
@@ -99,7 +128,7 @@ class StorageClient:
                 )
                 return self.get_bucket(bucket_name, stage)
             
-            bucket = self.client.buckets().create(
+            bucket = self._buckets.create(
                 name=bucket_name,
                 stage=stage,
                 description=description
@@ -127,6 +156,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to create bucket: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def get_bucket(self, bucket_name: str, stage: str = 'in') -> Dict[str, Any]:
         """Get bucket details.
         
@@ -139,7 +169,7 @@ class StorageClient:
         """
         try:
             bucket_id = f"{stage}.c-{bucket_name}"
-            return self.client.buckets().detail(bucket_id)
+            return self._buckets.detail(bucket_id)
         except Exception as e:
             self.logger.error(
                 'Error getting bucket details',
@@ -151,6 +181,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to get bucket details: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def table_exists(
         self,
         bucket_name: str,
@@ -169,7 +200,7 @@ class StorageClient:
         """
         try:
             bucket_id = f"{stage}.c-{bucket_name}"
-            tables = self.tables.list(bucket_id=bucket_id)
+            tables = self.retry_decorator(self.tables.list)(bucket_id=bucket_id)
             return any(t['id'] == f"{bucket_id}.{table_name}" for t in tables)
         except Exception as e:
             self.logger.error(
@@ -183,6 +214,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to check table existence: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def create_table(
         self,
         bucket_name: str,
@@ -217,7 +249,7 @@ class StorageClient:
             if primary_key is None:
                 primary_key = []
             
-            table = self.tables.create(
+            table = self.retry_decorator(self.tables.create)(
                 name=table_name,
                 bucket_id=bucket_id,
                 file_path=file_path,
@@ -250,6 +282,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to create table: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def load_table(
         self,
         bucket_name: str,
@@ -278,7 +311,7 @@ class StorageClient:
             table_id = f"{stage}.c-{bucket_name}.{table_name}"
             file_path = str(file_path)
             
-            result = self.tables.load(
+            result = self.retry_decorator(self.tables.load)(
                 table_id=table_id,
                 file_path=file_path,
                 is_incremental=False,
@@ -310,6 +343,7 @@ class StorageClient:
             )
             raise StorageError(f"Failed to load table: {e}")
 
+    @with_retries(logger=logger)  # Use instance logger
     def get_table(
         self,
         bucket_name: str,
@@ -328,7 +362,7 @@ class StorageClient:
         """
         try:
             table_id = f"{stage}.c-{bucket_name}.{table_name}"
-            return self.tables.detail(table_id)
+            return self.retry_decorator(self.tables.detail)(table_id)
         except Exception as e:
             self.logger.error(
                 'Error getting table details',
