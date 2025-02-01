@@ -17,16 +17,15 @@ from watchdog.events import (
     FileSystemEventHandler,
     FileCreatedEvent,
     FileModifiedEvent,
-    DirCreatedEvent
+    DirCreatedEvent,
+    FileSystemEvent
 )
 
 from .utils import (
     format_bytes,
     get_file_encoding,
-    sanitize_bucket_name,
     compress_file,
-    get_compressed_reader,
-    with_retries
+    get_compressed_reader
 )
 from .storage_client import StorageClient, StorageError
 
@@ -36,29 +35,23 @@ class StorageEventHandler(FileSystemEventHandler):
     def __init__(
         self,
         storage_client: StorageClient,
-        logger: logging.Logger,
-        compression_threshold_mb: int = 50,
-        max_retries: int = 3
+        logger: Optional[logging.Logger] = None,
+        compression_threshold_mb: float = 50.0
     ):
         """Initialize the event handler.
         
         Args:
             storage_client: Keboola Storage client instance
-            logger: Logger instance for event logging
-            compression_threshold_mb: Size threshold for compression in MB
-            max_retries: Maximum number of retry attempts for operations
+            logger: Optional logger instance
+            compression_threshold_mb: File size threshold for compression in MB
         """
         self.storage = storage_client
-        self.logger = logger
-        self.compression_threshold_mb = compression_threshold_mb
+        self.logger = logger or logging.getLogger(__name__)
+        self.compression_threshold = compression_threshold_mb * 1024 * 1024  # Convert to bytes
         self._processing = set()  # Track files being processed
         self._temp_files = set()  # Track temporary compressed files
         self._processing_lock = threading.Lock()  # Lock for thread safety
         self._stored_headers: Dict[str, list[str]] = {}  # Cache for table headers
-        self._retry_decorator = with_retries(
-            max_attempts=max_retries,
-            logger=logger
-        )
 
     def __del__(self):
         """Clean up temporary files on destruction."""
@@ -114,41 +107,74 @@ class StorageEventHandler(FileSystemEventHandler):
         with self._processing_lock:
             self._processing.discard(file_path)
 
-    def on_created(self, event):
-        """Handle creation events for directories and files."""
-        if event.is_directory:
-            self._handle_directory_created(event)
-        elif self._is_csv_file(event.src_path):
-            # Wait for file to be ready
-            file_path = Path(event.src_path)
-            if not self._is_file_ready(file_path):
-                self.logger.debug(
-                    'File not ready for processing, will retry on modification event',
-                    extra={'path': str(file_path)}
-                )
-                return
-            self._handle_file_created(event)
+    def on_created(self, event: FileSystemEvent) -> None:
+        """Handle creation events.
+        
+        Args:
+            event: File system event
+        """
+        try:
+            if event.is_directory:
+                self._handle_directory_created(event)
+            else:
+                self._handle_file_created(event)
+        except Exception as e:
+            self.logger.error(
+                f"Error handling creation event: {e}",
+                extra={'path': event.src_path}
+            )
 
-    def on_modified(self, event):
-        """Handle file modification events."""
-        if not event.is_directory and self._is_csv_file(event.src_path):
-            # Wait for file to be ready
-            file_path = Path(event.src_path)
-            if not self._is_file_ready(file_path):
-                self.logger.debug(
-                    'File not ready for processing, skipping',
-                    extra={'path': str(file_path)}
+    def on_modified(self, event: FileSystemEvent) -> None:
+        """Handle modification events.
+        
+        Args:
+            event: File system event
+        """
+        if not event.is_directory:
+            try:
+                self._handle_file_modified(event)
+            except Exception as e:
+                self.logger.error(
+                    f"Error handling modification event: {e}",
+                    extra={'path': event.src_path}
                 )
-                return
-            self._handle_file_modified(event)
 
-    def _handle_directory_created(self, event: DirCreatedEvent):
-        """Process new directory creation.
+    def _get_bucket_info(self, path: str) -> tuple[str, str]:
+        """Get bucket ID and name from directory path.
+        
+        Args:
+            path: Directory path
+            
+        Returns:
+            Tuple of (bucket_id, bucket_name)
+        """
+        # Get directory name from path
+        dir_name = os.path.basename(path)
+        
+        # Create bucket ID in format "in.c-{dir_name}"
+        # First sanitize the name to be valid for Keboola
+        bucket_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in dir_name.lower())
+        bucket_name = '_'.join(filter(None, bucket_name.split('_')))  # Remove empty parts
+        bucket_id = f"in.c-{bucket_name}"
+        
+        return bucket_id, bucket_name
+
+    def _handle_directory_created(self, event: FileSystemEvent) -> None:
+        """Handle directory creation event.
         
         Creates corresponding bucket in Keboola Storage.
         """
         dir_path = Path(event.src_path)
-        bucket_name = sanitize_bucket_name(dir_path.name)
+        
+        # Only process immediate subdirectories of the watched directory
+        if dir_path.parent.name != "watched_directory":
+            self.logger.debug(
+                f"Ignoring subdirectory creation: {dir_path}",
+                extra={'path': str(dir_path)}
+            )
+            return
+            
+        bucket_id, bucket_name = self._get_bucket_info(event.src_path)
         
         if not bucket_name:
             self.logger.error(
@@ -165,17 +191,22 @@ class StorageEventHandler(FileSystemEventHandler):
             extra={
                 'event': 'directory_created',
                 'path': str(dir_path),
+                'bucket_id': bucket_id,
                 'bucket_name': bucket_name
             }
         )
         
         try:
-            self.storage.create_bucket(bucket_name)
+            self.storage.create_bucket(
+                bucket_id=bucket_id,
+                bucket_name=bucket_name
+            )
             self.logger.info(
                 'Bucket created for directory',
                 extra={
                     'directory': str(dir_path),
-                    'bucket': bucket_name
+                    'bucket_id': bucket_id,
+                    'bucket_name': bucket_name
                 }
             )
         except StorageError as e:
@@ -183,13 +214,13 @@ class StorageEventHandler(FileSystemEventHandler):
                 'Failed to create bucket for directory',
                 extra={
                     'directory': str(dir_path),
-                    'bucket': bucket_name,
+                    'bucket_id': bucket_id,
                     'error': str(e)
                 }
             )
 
-    def _handle_file_created(self, event: FileCreatedEvent):
-        """Process new CSV file creation.
+    def _handle_file_created(self, event: FileCreatedEvent) -> None:
+        """Handle file creation event.
         
         Creates new table in Keboola Storage and performs initial load.
         """
@@ -198,16 +229,59 @@ class StorageEventHandler(FileSystemEventHandler):
         
         try:
             file_path = Path(event.src_path)
-            bucket_name = sanitize_bucket_name(file_path.parent.name)
-            table_name = sanitize_bucket_name(file_path.stem)
             
-            if not bucket_name or not table_name:
+            # Only process files in immediate subdirectories of watched directory
+            if file_path.parent.parent.name != "watched_directory":
+                self.logger.debug(
+                    f"Ignoring file in nested directory: {file_path}",
+                    extra={'path': str(file_path)}
+                )
+                return
+            
+            # Only process .csv files
+            if file_path.suffix.lower() != '.csv':
+                self.logger.debug(
+                    f"Ignoring non-CSV file: {file_path}",
+                    extra={'path': str(file_path)}
+                )
+                return
+            
+            bucket_id, bucket_name = self._get_bucket_info(file_path.parent)
+            table_id = file_path.stem
+            
+            # Ensure bucket exists before proceeding
+            try:
+                if not self.storage.bucket_exists(bucket_id):
+                    self.logger.info(
+                        'Creating bucket for directory',
+                        extra={
+                            'directory': str(file_path.parent),
+                            'bucket_id': bucket_id,
+                            'bucket_name': bucket_name
+                        }
+                    )
+                    self.storage.create_bucket(
+                        bucket_id=bucket_id,
+                        bucket_name=bucket_name
+                    )
+            except StorageError as e:
+                self.logger.error(
+                    'Failed to create/verify bucket',
+                    extra={
+                        'directory': str(file_path.parent),
+                        'bucket_id': bucket_id,
+                        'error': str(e)
+                    }
+                )
+                return
+
+            if not bucket_name or not table_id:
                 self.logger.error(
                     'Invalid file or directory name',
                     extra={
                         'path': str(file_path),
-                        'bucket_name': bucket_name,
-                        'table_name': table_name
+                        'bucket_id': bucket_id,
+                        'table_id': table_id
                     }
                 )
                 return
@@ -218,45 +292,73 @@ class StorageEventHandler(FileSystemEventHandler):
                     'event': 'file_created',
                     'path': str(file_path),
                     'size': format_bytes(file_path.stat().st_size),
-                    'bucket': bucket_name,
-                    'table': table_name
+                    'bucket_id': bucket_id,
+                    'table_id': table_id
                 }
             )
             
-            # Validate CSV and get its properties
-            dialect, header = self._analyze_csv(file_path)
-            if not dialect or not header:
+            # Wait for file to be ready
+            if not self._is_file_ready(file_path):
+                self.logger.debug(
+                    'File not ready for processing, will retry on modification',
+                    extra={'path': str(file_path)}
+                )
                 return
             
-            # Store header for future validation
-            table_id = f"{bucket_name}.{table_name}"
-            self._stored_headers[table_id] = header
-            
             # Prepare file for upload (compress if needed)
-            upload_path, is_compressed = self._prepare_file_for_upload(file_path)
+            upload_path = file_path
+            is_compressed = False
+            
+            if file_path.stat().st_size > self.compression_threshold:
+                try:
+                    compressed_path = compress_file(
+                        file_path,
+                        self.compression_threshold,
+                        self.logger
+                    )
+                    if compressed_path:
+                        upload_path = compressed_path
+                        is_compressed = True
+                        self._temp_files.add(str(compressed_path))
+                except Exception as e:
+                    self.logger.error(
+                        'Failed to compress file',
+                        extra={
+                            'path': str(file_path),
+                            'error': str(e)
+                        }
+                    )
             
             try:
                 # Create table and perform initial load
                 self.storage.create_table(
-                    bucket_name=bucket_name,
-                    table_name=table_name,
-                    file_path=upload_path,
-                    is_compressed=is_compressed,
-                    delimiter=dialect.delimiter,
-                    enclosure=dialect.quotechar
+                    bucket_id=bucket_id,
+                    table_id=table_id,
+                    file_path=upload_path
                 )
                 
                 self.logger.info(
                     'Table created and data loaded',
                     extra={
-                        'bucket': bucket_name,
-                        'table': table_name,
+                        'bucket_id': bucket_id,
+                        'table_id': table_id,
                         'file': str(file_path)
                     }
                 )
                 
             finally:
-                self._cleanup_upload_file(upload_path, file_path, is_compressed)
+                if is_compressed:
+                    try:
+                        os.remove(upload_path)
+                        self._temp_files.remove(str(upload_path))
+                    except Exception as e:
+                        self.logger.warning(
+                            'Failed to remove temporary file',
+                            extra={
+                                'file': str(upload_path),
+                                'error': str(e)
+                            }
+                        )
             
         except Exception as e:
             self.logger.error(
@@ -270,8 +372,8 @@ class StorageEventHandler(FileSystemEventHandler):
         finally:
             self._remove_from_processing(event.src_path)
 
-    def _handle_file_modified(self, event: FileModifiedEvent):
-        """Process CSV file modifications.
+    def _handle_file_modified(self, event: FileModifiedEvent) -> None:
+        """Handle file modification event.
         
         Validates header consistency and performs full load to existing table.
         """
@@ -280,16 +382,59 @@ class StorageEventHandler(FileSystemEventHandler):
             
         try:
             file_path = Path(event.src_path)
-            bucket_name = sanitize_bucket_name(file_path.parent.name)
-            table_name = sanitize_bucket_name(file_path.stem)
             
-            if not bucket_name or not table_name:
+            # Only process files in immediate subdirectories of watched directory
+            if file_path.parent.parent.name != "watched_directory":
+                self.logger.debug(
+                    f"Ignoring file in nested directory: {file_path}",
+                    extra={'path': str(file_path)}
+                )
+                return
+            
+            # Only process .csv files
+            if file_path.suffix.lower() != '.csv':
+                self.logger.debug(
+                    f"Ignoring non-CSV file: {file_path}",
+                    extra={'path': str(file_path)}
+                )
+                return
+            
+            bucket_id, bucket_name = self._get_bucket_info(file_path.parent)
+            table_id = file_path.stem
+            
+            # Ensure bucket exists before proceeding
+            try:
+                if not self.storage.bucket_exists(bucket_id):
+                    self.logger.info(
+                        'Creating bucket for directory',
+                        extra={
+                            'directory': str(file_path.parent),
+                            'bucket_id': bucket_id,
+                            'bucket_name': bucket_name
+                        }
+                    )
+                    self.storage.create_bucket(
+                        bucket_id=bucket_id,
+                        bucket_name=bucket_name
+                    )
+            except StorageError as e:
+                self.logger.error(
+                    'Failed to create/verify bucket',
+                    extra={
+                        'directory': str(file_path.parent),
+                        'bucket_id': bucket_id,
+                        'error': str(e)
+                    }
+                )
+                return
+
+            if not bucket_name or not table_id:
                 self.logger.error(
                     'Invalid file or directory name',
                     extra={
                         'path': str(file_path),
-                        'bucket_name': bucket_name,
-                        'table_name': table_name
+                        'bucket_id': bucket_id,
+                        'table_id': table_id
                     }
                 )
                 return
@@ -300,67 +445,85 @@ class StorageEventHandler(FileSystemEventHandler):
                     'event': 'file_modified',
                     'path': str(file_path),
                     'size': format_bytes(file_path.stat().st_size),
-                    'bucket': bucket_name,
-                    'table': table_name
+                    'bucket_id': bucket_id,
+                    'table_id': table_id
                 }
             )
             
-            # Validate CSV and check header consistency
-            dialect, header = self._analyze_csv(file_path)
-            if not dialect or not header:
-                return
-            
-            # Verify table exists
-            if not self.storage.table_exists(bucket_name, table_name):
-                self.logger.error(
-                    'Table not found for modified file',
-                    extra={
-                        'bucket': bucket_name,
-                        'table': table_name,
-                        'file': str(file_path)
-                    }
+            # Wait for file to be ready
+            if not self._is_file_ready(file_path):
+                self.logger.debug(
+                    'File not ready for processing, will retry later',
+                    extra={'path': str(file_path)}
                 )
                 return
             
-            # Check header consistency
-            table_id = f"{bucket_name}.{table_name}"
-            if table_id in self._stored_headers:
-                # Use cached header first
-                if not self._verify_header_consistency(header, {'columns': [{'name': h} for h in self._stored_headers[table_id]]}):
-                    return
-            else:
-                # Fallback to API check
-                table = self.storage.get_table(bucket_name, table_name)
-                if not self._verify_header_consistency(header, table):
-                    return
-                # Cache the header for future checks
-                self._stored_headers[table_id] = header
+            # Verify table exists
+            if not self.storage.table_exists(bucket_id, table_id):
+                self.logger.warning(
+                    'Table does not exist, creating new table',
+                    extra={
+                        'bucket_id': bucket_id,
+                        'table_id': table_id
+                    }
+                )
+                self._handle_file_created(event)
+                return
             
             # Prepare file for upload (compress if needed)
-            upload_path, is_compressed = self._prepare_file_for_upload(file_path)
+            upload_path = file_path
+            is_compressed = False
+            
+            if file_path.stat().st_size > self.compression_threshold:
+                try:
+                    compressed_path = compress_file(
+                        file_path,
+                        self.compression_threshold,
+                        self.logger
+                    )
+                    if compressed_path:
+                        upload_path = compressed_path
+                        is_compressed = True
+                        self._temp_files.add(str(compressed_path))
+                except Exception as e:
+                    self.logger.error(
+                        'Failed to compress file',
+                        extra={
+                            'path': str(file_path),
+                            'error': str(e)
+                        }
+                    )
             
             try:
                 # Perform full load
                 self.storage.load_table(
-                    bucket_name=bucket_name,
-                    table_name=table_name,
-                    file_path=upload_path,
-                    is_compressed=is_compressed,
-                    delimiter=dialect.delimiter,
-                    enclosure=dialect.quotechar
+                    bucket_id=bucket_id,
+                    table_id=table_id,
+                    file_path=upload_path
                 )
                 
                 self.logger.info(
                     'Table data updated',
                     extra={
-                        'bucket': bucket_name,
-                        'table': table_name,
+                        'bucket_id': bucket_id,
+                        'table_id': table_id,
                         'file': str(file_path)
                     }
                 )
                 
             finally:
-                self._cleanup_upload_file(upload_path, file_path, is_compressed)
+                if is_compressed:
+                    try:
+                        os.remove(upload_path)
+                        self._temp_files.remove(str(upload_path))
+                    except Exception as e:
+                        self.logger.warning(
+                            'Failed to remove temporary file',
+                            extra={
+                                'file': str(upload_path),
+                                'error': str(e)
+                            }
+                        )
             
         except Exception as e:
             self.logger.error(
@@ -374,175 +537,6 @@ class StorageEventHandler(FileSystemEventHandler):
         finally:
             self._remove_from_processing(event.src_path)
 
-    def _cleanup_upload_file(self, upload_path: Path, original_path: Path, is_compressed: bool):
-        """Clean up temporary upload file if it was created."""
-        if is_compressed and upload_path != original_path:
-            try:
-                os.remove(upload_path)
-                self._temp_files.remove(str(upload_path))
-            except Exception as e:
-                self.logger.warning(
-                    'Failed to remove temporary file',
-                    extra={
-                        'file': str(upload_path),
-                        'error': str(e)
-                    }
-                )
-
-    def _verify_header_consistency(
-        self,
-        new_header: list[str],
-        table: dict
-    ) -> bool:
-        """Verify that the new CSV header matches the existing table.
-        
-        Args:
-            new_header: Header from the new CSV file
-            table: Table details from Keboola Storage
-            
-        Returns:
-            True if headers match, False otherwise
-        """
-        try:
-            existing_columns = [col['name'] for col in table.get('columns', [])]
-            
-            if not existing_columns:
-                self.logger.error(
-                    'No columns found in existing table',
-                    extra={
-                        'table_id': table.get('id'),
-                        'new_header': new_header
-                    }
-                )
-                return False
-            
-            if new_header != existing_columns:
-                self.logger.error(
-                    'CSV header does not match existing table',
-                    extra={
-                        'table_id': table.get('id'),
-                        'existing_columns': existing_columns,
-                        'new_header': new_header
-                    }
-                )
-                return False
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(
-                'Error verifying header consistency',
-                extra={
-                    'table_id': table.get('id'),
-                    'new_header': new_header,
-                    'error': str(e)
-                }
-            )
-            return False
-
-    def _is_csv_file(self, path: str) -> bool:
-        """Check if the file is a CSV file."""
-        return path.lower().endswith('.csv')
-
-    def _prepare_file_for_upload(
-        self,
-        file_path: Path
-    ) -> Tuple[Path, bool]:
-        """Prepare file for upload, compressing if necessary.
-        
-        Args:
-            file_path: Path to the CSV file
-            
-        Returns:
-            Tuple of (path_to_use, is_compressed)
-        """
-        try:
-            compressed_path = compress_file(
-                file_path,
-                threshold_mb=self.compression_threshold_mb,
-                logger=self.logger
-            )
-            
-            if compressed_path:
-                self._temp_files.add(str(compressed_path))
-                return compressed_path, True
-                
-            return file_path, False
-            
-        except Exception as e:
-            self.logger.error(
-                'Error preparing file for upload',
-                extra={
-                    'path': str(file_path),
-                    'error': str(e)
-                }
-            )
-            raise
-
-    def _analyze_csv(self, file_path: Path) -> tuple[Optional[csv.Dialect], Optional[list[str]]]:
-        """Analyze CSV file to detect dialect and validate header.
-        
-        Args:
-            file_path: Path to the CSV file
-            
-        Returns:
-            Tuple of (dialect, header) if valid, (None, None) if invalid
-        """
-        try:
-            # Read a sample of the file to detect dialect
-            sample_size = 1024 * 1024  # 1MB sample
-            with get_compressed_reader(file_path) as f:
-                sample = f.read(sample_size).decode(get_file_encoding(str(file_path)))
-            
-            dialect = csv.Sniffer().sniff(sample)
-            has_header = csv.Sniffer().has_header(sample)
-            
-            if not has_header:
-                self.logger.error(
-                    'CSV file has no header',
-                    extra={
-                        'event': 'csv_validation_error',
-                        'path': str(file_path),
-                        'error': 'No header detected'
-                    }
-                )
-                return None, None
-            
-            # Read the header
-            with get_compressed_reader(file_path) as f:
-                # Skip BOM if present
-                sample = f.read(3)
-                if sample.startswith(b'\xef\xbb\xbf'):
-                    header_line = sample[3:] + f.readline()
-                else:
-                    header_line = sample + f.readline()
-                
-                header = next(csv.reader([header_line.decode(get_file_encoding(str(file_path)))], dialect=dialect))
-            
-            if not header:
-                self.logger.error(
-                    'Empty CSV header',
-                    extra={
-                        'event': 'csv_validation_error',
-                        'path': str(file_path),
-                        'error': 'Empty header'
-                    }
-                )
-                return None, None
-            
-            return dialect, header
-            
-        except Exception as e:
-            self.logger.error(
-                'Error analyzing CSV file',
-                extra={
-                    'event': 'csv_analysis_error',
-                    'path': str(file_path),
-                    'error': str(e)
-                }
-            )
-            return None, None
-
 class DirectoryWatcher:
     """Watches a directory for changes and processes events."""
     
@@ -550,19 +544,19 @@ class DirectoryWatcher:
         self,
         path: str,
         storage_client: StorageClient,
-        logger: logging.Logger,
-        compression_threshold_mb: int = 50
+        logger: Optional[logging.Logger] = None,
+        compression_threshold_mb: float = 50.0
     ):
         """Initialize the directory watcher.
         
         Args:
             path: Directory path to watch
             storage_client: Keboola Storage client instance
-            logger: Logger instance for event logging
-            compression_threshold_mb: Size threshold for compression in MB
+            logger: Optional logger instance
+            compression_threshold_mb: File size threshold for compression in MB
         """
         self.path = Path(path)
-        self.logger = logger
+        self.logger = logger or logging.getLogger(__name__)
         self.observer = Observer()
         self.event_handler = StorageEventHandler(
             storage_client=storage_client,

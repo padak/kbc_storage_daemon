@@ -36,3 +36,7 @@ env/
 *.log
 *.log.*
 watched_directory/
+test_data/
+
+# macOS
+.DS_Store

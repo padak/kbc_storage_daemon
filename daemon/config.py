@@ -1,134 +1,122 @@
-"""Configuration management for the Keboola Storage Daemon.
-
-This module handles loading and validating configuration from environment variables
-and optional config files (JSON/YAML).
-"""
+"""Configuration module for the Keboola Storage Daemon."""
 
 import os
-import json
-import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Optional, Union
+
 from dotenv import load_dotenv
 
 class ConfigurationError(Exception):
-    """Raised when there are issues with configuration loading or validation."""
+    """Custom exception for configuration errors."""
     pass
 
 class Config:
-    """Configuration manager for the daemon.
+    """Configuration handler for the daemon."""
     
-    Handles loading configuration from environment variables and optional config files.
-    Environment variables take precedence over config file values.
-    """
+    def __init__(self, env_file: Optional[Union[str, Path]] = None):
+        """Initialize configuration from environment variables.
+        
+        Args:
+            env_file: Optional path to .env file
+        """
+        # Load environment variables from .env file if provided
+        if env_file:
+            load_dotenv(env_file)
+        else:
+            load_dotenv()  # Look for .env in current directory
+        
+        # Required configuration
+        self._config = {
+            'keboola_api_token': self._get_required('KEBOOLA_API_TOKEN'),
+            'keboola_stack_url': self._get_required('KEBOOLA_STACK_URL'),
+            'watched_directory': self._get_required('WATCHED_DIRECTORY'),
+        }
+        
+        # Optional configuration with defaults
+        self._config.update({
+            'log_level': self._get_log_level(),
+            'log_file': os.getenv('LOG_FILE', 'daemon.log'),
+            'log_dir': os.getenv('LOG_DIR'),
+            'compression_threshold_mb': float(os.getenv('COMPRESSION_THRESHOLD_MB', '50')),
+            'max_retries': int(os.getenv('MAX_RETRIES', '3')),
+            'initial_retry_delay': float(os.getenv('INITIAL_RETRY_DELAY', '1.0')),
+            'max_retry_delay': float(os.getenv('MAX_RETRY_DELAY', '30.0')),
+            'retry_backoff': float(os.getenv('RETRY_BACKOFF', '2.0'))
+        })
     
-    REQUIRED_ENV_VARS = {
-        'KEBOOLA_STACK_URL': 'Keboola Stack endpoint URL',
-        'KEBOOLA_API_TOKEN': 'Keboola Storage API token',
-        'WATCHED_DIRECTORY': 'Directory to monitor for changes',
-    }
-
-    OPTIONAL_ENV_VARS = {
-        'LOG_LEVEL': 'INFO',  # Default log level
-        'LOG_FILE': 'daemon.log',  # Default log file name
-        'CONFIG_FILE': None,  # Optional config file path
-    }
-
-    def __init__(self):
-        """Initialize configuration with default values."""
-        self._config: Dict[str, Any] = {}
-        self._load_config()
-
-    def _load_env_vars(self) -> None:
-        """Load and validate environment variables."""
-        # Load .env file if it exists
-        load_dotenv()
-
-        # Check required environment variables
-        missing_vars = []
-        for var, description in self.REQUIRED_ENV_VARS.items():
-            value = os.getenv(var)
-            if not value:
-                missing_vars.append(f"{var} ({description})")
-            else:
-                self._config[var.lower()] = value
-
-        if missing_vars:
+    def _get_required(self, key: str) -> str:
+        """Get a required environment variable.
+        
+        Args:
+            key: Environment variable name
+            
+        Returns:
+            The environment variable value
+            
+        Raises:
+            ConfigurationError: If the environment variable is not set
+        """
+        value = os.getenv(key)
+        if value is None:
+            raise ConfigurationError(f"Required environment variable {key} is not set")
+        return value.strip()
+    
+    def _get_log_level(self) -> str:
+        """Get and validate log level from environment.
+        
+        Returns:
+            Valid log level string
+            
+        Raises:
+            ConfigurationError: If log level is invalid
+        """
+        valid_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
+        level = os.getenv('LOG_LEVEL', 'INFO').strip().upper()
+        
+        # Remove any comments that might be in the value
+        level = level.split('#')[0].strip()
+        
+        if level not in valid_levels:
             raise ConfigurationError(
-                "Missing required environment variables:\n" + 
-                "\n".join(f"- {var}" for var in missing_vars)
+                f"Invalid log level: {level}. "
+                f"Must be one of: {', '.join(valid_levels)}"
             )
-
-        # Load optional environment variables with defaults
-        for var, default in self.OPTIONAL_ENV_VARS.items():
-            self._config[var.lower()] = os.getenv(var, default)
-
-    def _load_config_file(self) -> None:
-        """Load configuration from JSON/YAML file if specified."""
-        config_file = self._config.get('config_file')
-        if not config_file:
-            return
-
-        config_path = Path(config_file)
-        if not config_path.exists():
-            raise ConfigurationError(f"Config file not found: {config_file}")
-
-        try:
-            with open(config_path, 'r') as f:
-                if config_path.suffix.lower() in ['.yaml', '.yml']:
-                    file_config = yaml.safe_load(f)
-                elif config_path.suffix.lower() == '.json':
-                    file_config = json.load(f)
-                else:
-                    raise ConfigurationError(
-                        f"Unsupported config file format: {config_path.suffix}"
-                    )
-
-                # Update config with file values, but don't override env vars
-                for key, value in file_config.items():
-                    key = key.lower()
-                    if key not in self._config:
-                        self._config[key] = value
-
-        except (yaml.YAMLError, json.JSONDecodeError) as e:
-            raise ConfigurationError(f"Error parsing config file: {e}")
-
-    def _load_config(self) -> None:
-        """Load configuration from all sources."""
-        self._load_env_vars()
-        self._load_config_file()
-        self._validate_config()
-
-    def _validate_config(self) -> None:
-        """Validate the loaded configuration."""
-        # Validate watched directory exists
-        watched_dir = Path(self._config['watched_directory'])
-        if not watched_dir.exists():
-            try:
-                watched_dir.mkdir(parents=True)
-            except Exception as e:
-                raise ConfigurationError(
-                    f"Cannot create watched directory: {watched_dir}\n{str(e)}"
-                )
-
-        # Validate log level
-        valid_log_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
-        log_level = self._config['log_level'].upper()
-        if log_level not in valid_log_levels:
-            raise ConfigurationError(
-                f"Invalid log level: {log_level}. "
-                f"Must be one of: {', '.join(valid_log_levels)}"
-            )
-        self._config['log_level'] = log_level
-
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get configuration value by key."""
-        return self._config.get(key.lower(), default)
-
-    def __getitem__(self, key: str) -> Any:
-        """Get configuration value by key (dictionary-style access)."""
-        return self._config[key.lower()]
-
-    def __contains__(self, key: str) -> bool:
-        """Check if configuration contains a key."""
-        return key.lower() in self._config
+        return level
+    
+    def __getitem__(self, key: str) -> Union[str, float, int]:
+        """Get a configuration value.
+        
+        Args:
+            key: Configuration key
+            
+        Returns:
+            The configuration value
+            
+        Raises:
+            KeyError: If the configuration key does not exist
+        """
+        return self._config[key]
+    
+    def get(self, key: str, default: Optional[Union[str, float, int]] = None) -> Optional[Union[str, float, int]]:
+        """Get a configuration value with a default.
+        
+        Args:
+            key: Configuration key
+            default: Default value if key does not exist
+            
+        Returns:
+            The configuration value or default
+        """
+        return self._config.get(key, default)
+    
+    def __str__(self) -> str:
+        """String representation of the configuration.
+        
+        Returns:
+            Configuration as a string, with sensitive values masked
+        """
+        # Create a copy of the config with sensitive values masked
+        masked_config = self._config.copy()
+        masked_config['keboola_api_token'] = '***'
+        
+        return str(masked_config)

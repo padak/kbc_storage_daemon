@@ -12,6 +12,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Optional, Union, BinaryIO, Callable, Any, TypeVar
 from pythonjsonlogger import jsonlogger
+import csv
+import tempfile
+from time import sleep
 
 # Type variable for generic return type
 T = TypeVar('T')
@@ -37,118 +40,93 @@ def with_retries(
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            last_exception = None
+        def wrapper(*args: Any, **kwargs: Any) -> T:
             delay = initial_delay
-
+            last_exception = None
+            
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
                     
-                    if attempt == max_attempts - 1:
-                        # Last attempt failed
-                        if logger:
-                            logger.error(
-                                f'All retry attempts failed for {func.__name__}',
-                                extra={
-                                    'function': func.__name__,
-                                    'max_attempts': max_attempts,
-                                    'error': str(e)
-                                }
-                            )
-                        raise last_exception
-                    
                     if logger:
                         logger.warning(
-                            f'Retry attempt {attempt + 1}/{max_attempts} for {func.__name__}',
+                            f"Attempt {attempt + 1}/{max_attempts} failed",
                             extra={
                                 'function': func.__name__,
-                                'attempt': attempt + 1,
-                                'max_attempts': max_attempts,
-                                'delay': delay,
-                                'error': str(e)
+                                'error': str(e),
+                                'retry_delay': delay
                             }
                         )
                     
-                    # Wait before next attempt
-                    time.sleep(delay)
-                    
-                    # Calculate next delay with exponential backoff
-                    delay = min(delay * backoff_factor, max_delay)
+                    if attempt < max_attempts - 1:
+                        sleep(delay)
+                        delay = min(delay * backoff_factor, max_delay)
             
-            # Should never reach here due to raise in last attempt
+            if logger:
+                logger.error(
+                    f"All {max_attempts} attempts failed",
+                    extra={
+                        'function': func.__name__,
+                        'error': str(last_exception)
+                    }
+                )
+            
             raise last_exception
             
         return wrapper
     return decorator
 
 def setup_logging(
-    log_file: str,
-    log_level: str,
-    max_bytes: int = 100 * 1024 * 1024,  # 100MB
-    backup_count: int = 5,
-    log_dir: Optional[str] = None
+    log_dir: Optional[str] = None,
+    log_file: Optional[str] = None,
+    log_level: str = 'INFO'
 ) -> logging.Logger:
-    """Set up logging with rotation and JSON formatting.
+    """Set up logging with JSON formatting and file rotation.
     
     Args:
+        log_dir: Directory for log files
         log_file: Name of the log file
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        max_bytes: Maximum size of each log file
-        backup_count: Number of backup files to keep
-        log_dir: Directory for log files (created if doesn't exist)
-    
+        log_level: Logging level
+        
     Returns:
-        Logger instance configured with file handler and JSON formatter
+        Configured logger instance
     """
-    logger = logging.getLogger('kbc_daemon')
-    logger.setLevel(log_level.upper())
-
-    # Create log directory if specified
-    if log_dir:
-        log_path = Path(log_dir)
-        log_path.mkdir(parents=True, exist_ok=True)
-        log_file = str(log_path / log_file)
-
-    # Create rotating file handler
-    handler = logging.handlers.RotatingFileHandler(
-        filename=log_file,
-        maxBytes=max_bytes,
-        backupCount=backup_count,
-        encoding='utf-8'
-    )
-
-    # Create JSON formatter with timestamp
-    class CustomJsonFormatter(jsonlogger.JsonFormatter):
-        def add_fields(self, log_record, record, message_dict):
-            super().add_fields(log_record, record, message_dict)
-            if not log_record.get('timestamp'):
-                log_record['timestamp'] = self.formatTime(record)
-            if log_record.get('level'):
-                log_record['level'] = log_record['level'].upper()
-            else:
-                log_record['level'] = record.levelname
-
-    formatter = CustomJsonFormatter(
-        '%(timestamp)s %(level)s %(name)s %(message)s'
+    logger = logging.getLogger('keboola.storage.daemon')
+    logger.setLevel(log_level)
+    
+    # Create formatter
+    formatter = jsonlogger.JsonFormatter(
+        '%(asctime)s %(name)s %(levelname)s %(message)s',
+        timestamp=True
     )
     
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-    # Log startup message
-    logger.info(
-        'Logging system initialized',
-        extra={
-            'log_file': log_file,
-            'log_level': log_level,
-            'max_bytes': max_bytes,
-            'backup_count': backup_count
-        }
-    )
-
+    # Set up file handler if log file is specified
+    if log_file:
+        # Create log directory if specified and doesn't exist
+        if log_dir:
+            log_dir_path = Path(log_dir)
+            log_dir_path.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir_path / log_file
+        else:
+            log_path = Path(log_file)
+            
+        # Create file handler with rotation
+        handler = logging.handlers.RotatingFileHandler(
+            filename=str(log_path),
+            maxBytes=100 * 1024 * 1024,  # 100MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    
+    # Always add console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
     return logger
 
 def format_bytes(size: int) -> str:
@@ -158,13 +136,13 @@ def format_bytes(size: int) -> str:
         size: Size in bytes
     
     Returns:
-        Formatted string (e.g., "1.23 MB")
+        Formatted string (e.g., "1.5 MB")
     """
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024.0:
-            return f"{size:.2f} {unit}"
+            return f"{size:.1f} {unit}"
         size /= 1024.0
-    return f"{size:.2f} PB"
+    return f"{size:.1f} PB"
 
 def sanitize_bucket_name(name: str) -> str:
     """Sanitize folder name to valid Keboola bucket name.
@@ -182,110 +160,95 @@ def sanitize_bucket_name(name: str) -> str:
     return sanitized
 
 def get_file_encoding(file_path: str) -> str:
-    """Detect file encoding, defaulting to UTF-8.
+    """Detect file encoding, handling UTF-8 with BOM.
     
     Args:
         file_path: Path to the file
-    
+        
     Returns:
         Detected encoding
     """
-    # TODO: Implement more sophisticated encoding detection if needed
+    with open(file_path, 'rb') as f:
+        raw = f.read(4)
+        if raw.startswith(b'\xef\xbb\xbf'):
+            return 'utf-8-sig'
     return 'utf-8'
 
 def compress_file(
-    input_path: Union[str, Path],
-    output_path: Optional[Union[str, Path]] = None,
-    threshold_mb: int = 50,
+    file_path: Path,
+    threshold_bytes: int,
     logger: Optional[logging.Logger] = None
 ) -> Optional[Path]:
-    """Compress file using gzip if it exceeds the size threshold.
+    """Compress file if it exceeds the size threshold.
     
     Args:
-        input_path: Path to the input file
-        output_path: Path for the compressed file (default: input_path + '.gz')
-        threshold_mb: Size threshold in MB (default: 50)
-        logger: Logger instance for progress logging
-    
+        file_path: Path to the file
+        threshold_bytes: Size threshold in bytes
+        logger: Optional logger instance
+        
     Returns:
-        Path to the compressed file if compression was performed, None otherwise
+        Path to compressed file if compression was performed,
+        None if no compression was needed
     """
-    input_path = Path(input_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-    
-    # Check file size
-    file_size_mb = input_path.stat().st_size / (1024 * 1024)
-    if file_size_mb < threshold_mb:
-        if logger:
-            logger.debug(
-                'File size below compression threshold',
-                extra={
-                    'path': str(input_path),
-                    'size_mb': round(file_size_mb, 2),
-                    'threshold_mb': threshold_mb
-                }
-            )
-        return None
-    
-    # Set output path
-    if output_path is None:
-        output_path = input_path.with_suffix(input_path.suffix + '.gz')
-    else:
-        output_path = Path(output_path)
-    
-    if logger:
-        logger.info(
-            'Compressing file',
-            extra={
-                'input_path': str(input_path),
-                'output_path': str(output_path),
-                'original_size_mb': round(file_size_mb, 2)
-            }
-        )
-    
-    # Compress file
     try:
-        with open(input_path, 'rb') as f_in:
-            with gzip.open(output_path, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
+        file_size = file_path.stat().st_size
         
-        compressed_size_mb = output_path.stat().st_size / (1024 * 1024)
-        if logger:
-            logger.info(
-                'File compressed successfully',
-                extra={
-                    'path': str(output_path),
-                    'original_size_mb': round(file_size_mb, 2),
-                    'compressed_size_mb': round(compressed_size_mb, 2),
-                    'compression_ratio': round(compressed_size_mb / file_size_mb, 2)
-                }
-            )
+        if file_size > threshold_bytes:
+            if logger:
+                logger.info(
+                    'Compressing file',
+                    extra={
+                        'file': str(file_path),
+                        'size': format_bytes(file_size),
+                        'threshold': format_bytes(threshold_bytes)
+                    }
+                )
+            
+            # Create temporary file with .gz extension
+            temp_fd, temp_path = tempfile.mkstemp(suffix='.gz')
+            os.close(temp_fd)
+            
+            # Compress the file
+            with open(file_path, 'rb') as f_in:
+                with gzip.open(temp_path, 'wb') as f_out:
+                    f_out.writelines(f_in)
+            
+            compressed_size = Path(temp_path).stat().st_size
+            
+            if logger:
+                logger.info(
+                    'File compressed',
+                    extra={
+                        'original_size': format_bytes(file_size),
+                        'compressed_size': format_bytes(compressed_size),
+                        'compression_ratio': f"{(file_size - compressed_size) / file_size:.1%}"
+                    }
+                )
+            
+            return Path(temp_path)
         
-        return output_path
+        return None
         
     except Exception as e:
         if logger:
             logger.error(
                 'Error compressing file',
                 extra={
-                    'input_path': str(input_path),
-                    'output_path': str(output_path),
+                    'file': str(file_path),
                     'error': str(e)
                 }
             )
         raise
 
-def get_compressed_reader(file_path: Union[str, Path]) -> BinaryIO:
-    """Get appropriate file reader based on whether file is compressed.
+def get_compressed_reader(file_path: Path):
+    """Get appropriate file reader based on compression.
     
     Args:
         file_path: Path to the file
-    
+        
     Returns:
-        File object in binary read mode
+        File reader object
     """
-    path = Path(file_path)
-    if path.suffix.lower().endswith('.gz'):
-        return gzip.open(path, 'rb')
-    return open(path, 'rb')
+    if str(file_path).endswith('.gz'):
+        return gzip.open(file_path, 'rb')
+    return open(file_path, 'rb')
