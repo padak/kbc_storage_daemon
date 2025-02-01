@@ -17,10 +17,10 @@
    - [x] Set up log formatting
    - [x] Add basic logging utilities
 
-4. [ ] Docker Setup
-   - Create Dockerfile using lightweight base image
-   - Set up volume mounting for watched directory
-   - Configure logging volume
+4. [x] Docker Setup
+   - [x] Create Dockerfile using lightweight base image
+   - [x] Set up volume mounting for watched directory
+   - [x] Configure logging volume
 
 ## Phase 2: Core Functionality - File System Monitoring
 1. [ ] Implement Directory Watcher

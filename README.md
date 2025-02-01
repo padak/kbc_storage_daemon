@@ -59,10 +59,47 @@ python -m daemon.main
 
 ### Running with Docker
 
-```bash
-docker build -t kbc-daemon .
-docker run -v /path/to/watch:/watch -v /path/to/logs:/logs --env-file .env kbc-daemon
-```
+There are two ways to run the daemon using Docker:
+
+1. Using Docker Compose (recommended):
+   ```bash
+   # Create necessary directories
+   mkdir -p watched_directory logs
+
+   # Configure environment
+   cp .env.template .env
+   # Edit .env with your settings
+
+   # Start the daemon
+   docker-compose up -d
+
+   # View logs
+   docker-compose logs -f
+   ```
+
+2. Using Docker directly:
+   ```bash
+   # Build the image
+   docker build -t kbc-daemon .
+
+   # Create necessary directories
+   mkdir -p watched_directory logs
+
+   # Run the container
+   docker run -d \
+     --name kbc-daemon \
+     -v "$(pwd)/watched_directory:/watch" \
+     -v "$(pwd)/logs:/logs" \
+     --env-file .env \
+     --restart unless-stopped \
+     kbc-daemon
+   ```
+
+The daemon will:
+- Monitor the `/watch` directory (mapped to `watched_directory` on your host)
+- Store logs in the `/logs` directory (mapped to `logs` on your host)
+- Automatically restart if it crashes
+- Run as a non-root user for security
 
 ## Development
 
