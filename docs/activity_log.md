@@ -37,16 +37,16 @@
    - [x] Implement gzip compression for files >50MB
 
 ## Phase 3: Keboola Integration
-1. [ ] Storage Client Implementation
-   - Set up Keboola SDK integration
-   - Implement bucket management
-   - Create table operations wrapper
+1. [x] Storage Client Implementation
+   - [x] Set up Keboola SDK integration
+   - [x] Implement bucket management
+   - [x] Create table operations wrapper
 
-2. [ ] Data Upload Logic
-   - Implement initial table creation
-   - Add full load table update
-   - Handle compressed file uploads
-   - Implement CSV import with proper dialect settings
+2. [x] Data Upload Logic
+   - [x] Implement initial table creation
+   - [x] Add full load table update
+   - [x] Handle compressed file uploads
+   - [x] Implement CSV import with proper dialect settings
 
 ## Phase 4: Error Handling and Robustness
 1. [ ] Implement Retry Mechanism

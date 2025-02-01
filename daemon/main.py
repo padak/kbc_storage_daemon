@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import Config
 from .utils import setup_logging
+from .storage_client import StorageClient, StorageError
 from .watcher import DirectoryWatcher
 
 def signal_handler(signum, frame):
@@ -33,13 +34,29 @@ def main():
         print(f"Failed to set up logging: {e}")
         sys.exit(1)
 
+    # Initialize storage client
+    try:
+        storage = StorageClient(
+            api_token=config['keboola_api_token'],
+            stack_url=config['keboola_stack_url'],
+            logger=logger
+        )
+    except StorageError as e:
+        logger.error(f"Failed to initialize storage client: {e}")
+        sys.exit(1)
+
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     # Create and start the watcher
     try:
-        watcher = DirectoryWatcher(config['watched_directory'], logger)
+        watcher = DirectoryWatcher(
+            path=config['watched_directory'],
+            storage_client=storage,
+            logger=logger,
+            compression_threshold_mb=config.get('compression_threshold_mb', 50)
+        )
         watcher.start()
         
         logger.info(
@@ -49,7 +66,8 @@ def main():
                 'config': {
                     'watched_directory': config['watched_directory'],
                     'log_file': config['log_file'],
-                    'log_level': config['log_level']
+                    'log_level': config['log_level'],
+                    'compression_threshold_mb': config.get('compression_threshold_mb', 50)
                 }
             }
         )
