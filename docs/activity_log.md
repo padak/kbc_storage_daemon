@@ -1,16 +1,16 @@
 # Keboola Storage Daemon - Development Plan
 
 ## Phase 1: Project Setup and Basic Infrastructure
-1. [ ] Initialize project structure
-   - Create basic folder structure
-   - Set up Python virtual environment
-   - Create initial requirements.txt with base dependencies
-   - Set up .gitignore
+1. [x] Initialize project structure
+   - [x] Create basic folder structure
+   - [x] Set up Python virtual environment
+   - [x] Create initial requirements.txt with base dependencies
+   - [x] Set up .gitignore
 
 2. [ ] Configuration Management
-   - Implement config loader (supporting both JSON and YAML)
-   - Set up .env handling for API tokens
-   - Create sample configuration files
+   - [ ] Implement config loader (supporting both JSON and YAML)
+   - [ ] Set up .env handling for API tokens
+   - [ ] Create sample configuration files
 
 3. [ ] Logging System
    - Implement file-based logging with rotation (100MB limit)
