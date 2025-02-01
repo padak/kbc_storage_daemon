@@ -7,10 +7,10 @@
    - [x] Create initial requirements.txt with base dependencies
    - [x] Set up .gitignore
 
-2. [ ] Configuration Management
-   - [ ] Implement config loader (supporting both JSON and YAML)
-   - [ ] Set up .env handling for API tokens
-   - [ ] Create sample configuration files
+2. [x] Configuration Management
+   - [x] Implement config loader (supporting both JSON and YAML)
+   - [x] Set up .env handling for API tokens
+   - [x] Create sample configuration files
 
 3. [ ] Logging System
    - Implement file-based logging with rotation (100MB limit)
