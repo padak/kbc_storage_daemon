@@ -2,10 +2,13 @@
 #
 # This module provides logging setup and other utility functions.
 
+import os
+import gzip
+import shutil
 import logging
 import logging.handlers
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, BinaryIO
 from pythonjsonlogger import jsonlogger
 
 def setup_logging(
@@ -116,3 +119,100 @@ def get_file_encoding(file_path: str) -> str:
     """
     # TODO: Implement more sophisticated encoding detection if needed
     return 'utf-8'
+
+def compress_file(
+    input_path: Union[str, Path],
+    output_path: Optional[Union[str, Path]] = None,
+    threshold_mb: int = 50,
+    logger: Optional[logging.Logger] = None
+) -> Optional[Path]:
+    """Compress file using gzip if it exceeds the size threshold.
+    
+    Args:
+        input_path: Path to the input file
+        output_path: Path for the compressed file (default: input_path + '.gz')
+        threshold_mb: Size threshold in MB (default: 50)
+        logger: Logger instance for progress logging
+    
+    Returns:
+        Path to the compressed file if compression was performed, None otherwise
+    """
+    input_path = Path(input_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    
+    # Check file size
+    file_size_mb = input_path.stat().st_size / (1024 * 1024)
+    if file_size_mb < threshold_mb:
+        if logger:
+            logger.debug(
+                'File size below compression threshold',
+                extra={
+                    'path': str(input_path),
+                    'size_mb': round(file_size_mb, 2),
+                    'threshold_mb': threshold_mb
+                }
+            )
+        return None
+    
+    # Set output path
+    if output_path is None:
+        output_path = input_path.with_suffix(input_path.suffix + '.gz')
+    else:
+        output_path = Path(output_path)
+    
+    if logger:
+        logger.info(
+            'Compressing file',
+            extra={
+                'input_path': str(input_path),
+                'output_path': str(output_path),
+                'original_size_mb': round(file_size_mb, 2)
+            }
+        )
+    
+    # Compress file
+    try:
+        with open(input_path, 'rb') as f_in:
+            with gzip.open(output_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        compressed_size_mb = output_path.stat().st_size / (1024 * 1024)
+        if logger:
+            logger.info(
+                'File compressed successfully',
+                extra={
+                    'path': str(output_path),
+                    'original_size_mb': round(file_size_mb, 2),
+                    'compressed_size_mb': round(compressed_size_mb, 2),
+                    'compression_ratio': round(compressed_size_mb / file_size_mb, 2)
+                }
+            )
+        
+        return output_path
+        
+    except Exception as e:
+        if logger:
+            logger.error(
+                'Error compressing file',
+                extra={
+                    'input_path': str(input_path),
+                    'output_path': str(output_path),
+                    'error': str(e)
+                }
+            )
+        raise
+
+def get_compressed_reader(file_path: Union[str, Path]) -> BinaryIO:
+    """Get appropriate file reader based on whether file is compressed.
+    
+    Args:
+        file_path: Path to the file
+    
+    Returns:
+        File object in binary read mode
+    """
+    path = Path(file_path)
+    if path.suffix.lower().endswith('.gz'):
+        return gzip.open(path, 'rb')
+    return open(path, 'rb')

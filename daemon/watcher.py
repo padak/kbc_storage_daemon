@@ -7,8 +7,9 @@ directory/file changes accordingly.
 import os
 import csv
 import gzip
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 from watchdog.observers import Observer
 from watchdog.events import (
@@ -18,19 +19,40 @@ from watchdog.events import (
     DirCreatedEvent
 )
 
-from .utils import format_bytes, get_file_encoding, sanitize_bucket_name
+from .utils import (
+    format_bytes,
+    get_file_encoding,
+    sanitize_bucket_name,
+    compress_file,
+    get_compressed_reader
+)
 
 class StorageEventHandler(FileSystemEventHandler):
     """Handles filesystem events and processes them for Keboola Storage."""
 
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger, compression_threshold_mb: int = 50):
         """Initialize the event handler.
         
         Args:
             logger: Logger instance for event logging
+            compression_threshold_mb: Size threshold for compression in MB
         """
         self.logger = logger
+        self.compression_threshold_mb = compression_threshold_mb
         self._processing = set()  # Track files being processed to avoid duplicates
+        self._temp_files = set()  # Track temporary compressed files
+
+    def __del__(self):
+        """Clean up temporary files on destruction."""
+        for temp_file in self._temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except Exception as e:
+                self.logger.warning(
+                    f'Failed to remove temporary file: {temp_file}',
+                    extra={'error': str(e)}
+                )
 
     def on_created(self, event):
         """Handle creation events for directories and files."""
@@ -150,6 +172,41 @@ class StorageEventHandler(FileSystemEventHandler):
         """Check if the file is a CSV file."""
         return path.lower().endswith('.csv')
 
+    def _prepare_file_for_upload(
+        self,
+        file_path: Path
+    ) -> Tuple[Path, bool]:
+        """Prepare file for upload, compressing if necessary.
+        
+        Args:
+            file_path: Path to the CSV file
+            
+        Returns:
+            Tuple of (path_to_use, is_compressed)
+        """
+        try:
+            compressed_path = compress_file(
+                file_path,
+                threshold_mb=self.compression_threshold_mb,
+                logger=self.logger
+            )
+            
+            if compressed_path:
+                self._temp_files.add(str(compressed_path))
+                return compressed_path, True
+                
+            return file_path, False
+            
+        except Exception as e:
+            self.logger.error(
+                'Error preparing file for upload',
+                extra={
+                    'path': str(file_path),
+                    'error': str(e)
+                }
+            )
+            raise
+
     def _analyze_csv(self, file_path: Path) -> tuple[Optional[csv.Dialect], Optional[list[str]]]:
         """Analyze CSV file to detect dialect and validate header.
         
@@ -162,8 +219,8 @@ class StorageEventHandler(FileSystemEventHandler):
         try:
             # Read a sample of the file to detect dialect
             sample_size = 1024 * 1024  # 1MB sample
-            with open(file_path, 'r', encoding=get_file_encoding(str(file_path))) as f:
-                sample = f.read(sample_size)
+            with get_compressed_reader(file_path) as f:
+                sample = f.read(sample_size).decode(get_file_encoding(str(file_path)))
             
             dialect = csv.Sniffer().sniff(sample)
             has_header = csv.Sniffer().has_header(sample)
@@ -180,9 +237,15 @@ class StorageEventHandler(FileSystemEventHandler):
                 return None, None
             
             # Read the header
-            with open(file_path, 'r', encoding=get_file_encoding(str(file_path))) as f:
-                reader = csv.reader(f, dialect=dialect)
-                header = next(reader)
+            with get_compressed_reader(file_path) as f:
+                # Skip BOM if present
+                sample = f.read(3)
+                if sample.startswith(b'\xef\xbb\xbf'):
+                    header_line = sample[3:] + f.readline()
+                else:
+                    header_line = sample + f.readline()
+                
+                header = next(csv.reader([header_line.decode(get_file_encoding(str(file_path)))], dialect=dialect))
             
             if not header:
                 self.logger.error(
