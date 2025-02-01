@@ -23,18 +23,18 @@
    - [x] Configure logging volume
 
 ## Phase 2: Core Functionality - File System Monitoring
-1. [ ] Implement Directory Watcher
-   - Set up watchdog observer
-   - Implement event handlers for:
-     - Directory creation
-     - File creation
-     - File modification
+1. [x] Implement Directory Watcher
+   - [x] Set up watchdog observer
+   - [x] Implement event handlers for:
+     - [x] Directory creation
+     - [x] File creation
+     - [x] File modification
 
-2. [ ] CSV File Processing
-   - Implement CSV dialect detection
-   - Add UTF-8 validation
-   - Create header validation logic
-   - Implement gzip compression for files >50MB
+2. [x] CSV File Processing
+   - [x] Implement CSV dialect detection
+   - [x] Add UTF-8 validation
+   - [x] Create header validation logic
+   - [ ] Implement gzip compression for files >50MB
 
 ## Phase 3: Keboola Integration
 1. [ ] Storage Client Implementation
