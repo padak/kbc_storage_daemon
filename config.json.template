@@ -1,0 +1,17 @@
+{
+    "csv_dialect": {
+        "delimiter": ",",
+        "quotechar": "\"",
+        "escapechar": "\\",
+        "encoding": "utf-8"
+    },
+    "upload": {
+        "compression_threshold_mb": 50,
+        "max_retries": 3,
+        "retry_delay": 5
+    },
+    "log_rotation": {
+        "max_size_mb": 100,
+        "backup_count": 5
+    }
+} 
