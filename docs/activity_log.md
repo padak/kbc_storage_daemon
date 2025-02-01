@@ -12,10 +12,10 @@
    - [x] Set up .env handling for API tokens
    - [x] Create sample configuration files
 
-3. [ ] Logging System
-   - Implement file-based logging with rotation (100MB limit)
-   - Set up log formatting
-   - Add basic logging utilities
+3. [x] Logging System
+   - [x] Implement file-based logging with rotation (100MB limit)
+   - [x] Set up log formatting
+   - [x] Add basic logging utilities
 
 4. [ ] Docker Setup
    - Create Dockerfile using lightweight base image
