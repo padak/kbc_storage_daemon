@@ -31,9 +31,18 @@ env/
 .vscode/
 *.swp
 *.swo
+.cursorrules
+
+# Build
+*.spec
+build/
+dist/
+
+# Logs
+*.log
+logs/
 
 # Project specific
-*.log
 *.log.*
 watched_directory/
 test_data/
