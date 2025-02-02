@@ -137,25 +137,43 @@ class StorageClient:
         self,
         bucket_id: str,
         table_id: str,
-        file_path: Path,
+        file_path: Union[str, Path],
         is_incremental: bool = False
-    ) -> Dict:
-        """Load data into an existing table."""
+    ) -> None:
+        """Load data into an existing table.
+        
+        Args:
+            bucket_id: Bucket ID
+            table_id: Table ID
+            file_path: Path to the CSV file
+            is_incremental: Whether to perform incremental load (append) or full load (replace)
+        """
         try:
-            if not file_path.exists():
-                raise StorageError(f"File not found: {file_path}")
+            # Get table client using both token and root_url from existing client
+            tables = Tables(token=self._client.token, root_url=self._client.root_url)
             
-            self.logger.info(
-                f"Loading data into table {table_id} in bucket {bucket_id}"
-            )
-            
-            return self._client.tables.load(
+            # Load data - pass the file path string directly
+            tables.load(
                 table_id=f"{bucket_id}.{table_id}",
-                file_path=str(file_path),
+                file_path=str(file_path),  # Convert Path to string
                 is_incremental=is_incremental
             )
+                
+            self.logger.info(
+                f"{'Incrementally updated' if is_incremental else 'Loaded'} table data",
+                extra={
+                    'bucket_id': bucket_id,
+                    'table_id': table_id,
+                    'file': str(file_path),
+                    'mode': 'incremental' if is_incremental else 'full'
+                }
+            )
+            
         except Exception as e:
-            raise StorageError(f"Failed to load table data: {e}")
+            raise StorageError(
+                f"Failed to {'incrementally update' if is_incremental else 'load'} "
+                f"table {bucket_id}.{table_id}: {e}"
+            )
     
     def get_table(self, bucket_id: str, table_id: str) -> Dict:
         """Get table details."""

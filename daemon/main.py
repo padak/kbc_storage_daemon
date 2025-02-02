@@ -15,7 +15,7 @@ from .watcher import DirectoryWatcher
 class DaemonContext:
     """Context manager for graceful daemon startup and shutdown."""
     
-    def __init__(self):
+    def __init__(self, handle_signals: bool = False):
         self.config: Optional[Config] = None
         self.logger = None
         self.storage = None
@@ -23,6 +23,7 @@ class DaemonContext:
         self._shutdown_event = threading.Event()
         self._original_sigint = None
         self._original_sigterm = None
+        self._handle_signals = handle_signals
 
     def _validate_watched_directory(self) -> None:
         """Validate and prepare watched directory."""
@@ -99,11 +100,12 @@ class DaemonContext:
                 retry_backoff=self.config.get('retry_backoff', 2.0)
             )
             
-            # Set up signal handlers
-            self._original_sigint = signal.getsignal(signal.SIGINT)
-            self._original_sigterm = signal.getsignal(signal.SIGTERM)
-            signal.signal(signal.SIGINT, self._signal_handler)
-            signal.signal(signal.SIGTERM, self._signal_handler)
+            # Set up signal handlers if requested
+            if self._handle_signals:
+                self._original_sigint = signal.getsignal(signal.SIGINT)
+                self._original_sigterm = signal.getsignal(signal.SIGTERM)
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
             
             # Create and start the watcher
             self.watcher = DirectoryWatcher(
