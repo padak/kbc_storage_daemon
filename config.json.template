@@ -13,5 +13,47 @@
     "log_rotation": {
         "max_size_mb": 100,
         "backup_count": 5
+    },
+    "mappings": [
+        {
+            "file_path": "/path/to/sales.csv",
+            "bucket_id": "in.c-sales",
+            "table_id": "daily_sales",
+            "sync_mode": "full_load",
+            "enabled": true,
+            "options": {}
+        },
+        {
+            "file_path": "/path/to/logs.txt",
+            "bucket_id": "in.c-logs",
+            "table_id": "system_logs",
+            "sync_mode": "streaming",
+            "enabled": true,
+            "options": {
+                "batch_size": 1000,
+                "streaming_endpoint": "https://connection.keboola.com/storage/events"
+            }
+        },
+        {
+            "file_path": "/path/to/transactions.csv",
+            "bucket_id": "in.c-transactions",
+            "table_id": "daily_transactions",
+            "sync_mode": "incremental",
+            "enabled": true,
+            "options": {
+                "primary_key": ["transaction_id"]
+            }
+        }
+    ],
+    "default_settings": {
+        "watched_directory": "/path/to/watch",
+        "log_level": "INFO",
+        "log_file": "daemon.log",
+        "log_dir": "/path/to/logs",
+        "compression_threshold_mb": 50,
+        "max_retries": 3,
+        "initial_retry_delay": 1.0,
+        "max_retry_delay": 30.0,
+        "retry_backoff": 2.0
     }
 } 

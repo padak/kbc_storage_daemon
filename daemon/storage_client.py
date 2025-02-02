@@ -46,23 +46,50 @@ class StorageClient:
         self._initial_retry_delay = initial_retry_delay
         self._max_retry_delay = max_retry_delay
         self._retry_backoff = retry_backoff
+        self._api_token = api_token
+        self._stack_url = stack_url
+        self._client = None
+        self._buckets_cache = None
         
+        # Initialize connection
+        self._connect()
+    
+    def _connect(self) -> None:
+        """Initialize or reinitialize the connection."""
         try:
             # Initialize client according to official SDK docs
-            self._client = Client(stack_url, api_token)
-            # Test connection by listing buckets
-            self._buckets
+            self._client = Client(self._stack_url, self._api_token)
+            # Test connection but don't cache buckets yet
+            self._client.buckets.list()
             self.logger.info("Successfully connected to Keboola Storage API")
         except Exception as e:
+            self._client = None
+            self._buckets_cache = None
             raise StorageError(f"Failed to connect to Keboola Storage API: {e}")
-    
+
+    def _ensure_connected(self) -> None:
+        """Ensure we have a valid connection."""
+        if not self._client:
+            self._connect()
+
     @property
-    def _buckets(self):
-        """Get list of buckets."""
-        try:
-            return self._client.buckets.list()
-        except Exception as e:
-            raise StorageError(f"Failed to list buckets: {e}")
+    def _buckets(self) -> List[Dict]:
+        """Get list of buckets with caching."""
+        if self._buckets_cache is None:
+            self._ensure_connected()
+            # Get ALL buckets without filtering
+            self._buckets_cache = self._client.buckets.list()
+        return self._buckets_cache
+    
+    def clear_cache(self) -> None:
+        """Clear all cached data."""
+        self._buckets_cache = None
+
+    def reconnect(self) -> None:
+        """Force reconnection to the API."""
+        self._client = None
+        self._buckets_cache = None
+        self._connect()
     
     def bucket_exists(self, bucket_id: str) -> bool:
         """Check if a bucket exists."""
@@ -181,3 +208,120 @@ class StorageClient:
             return self._client.tables.detail(f"{bucket_id}.{table_id}")
         except Exception as e:
             raise StorageError(f"Failed to get table details: {e}")
+
+    def list_buckets(self) -> List[Dict]:
+        """List all buckets.
+        
+        Returns:
+            List of bucket dictionaries
+        """
+        try:
+            self._ensure_connected()
+            # Get fresh list of ALL buckets without any filtering
+            buckets = self._client.buckets.list()
+            self.logger.debug(f"Retrieved {len(buckets)} buckets from Storage API")
+            return buckets
+        except Exception as e:
+            raise StorageError(f"Failed to list buckets: {e}")
+
+    def create_bucket(self, bucket_id: str, stage: str, description: str = None) -> Dict:
+        """Create a new bucket.
+        
+        Args:
+            bucket_id: Bucket ID (e.g. 'in.c-sales')
+            stage: Bucket stage ('in' or 'out')
+            description: Optional bucket description
+            
+        Returns:
+            Created bucket dictionary
+        """
+        try:
+            return self._client.buckets.create(
+                name=bucket_id.split('.')[-1],
+                stage=stage,
+                description=description
+            )
+        except Exception as e:
+            raise StorageError(f"Failed to create bucket: {e}")
+
+    def list_tables(self, bucket_id: str) -> List[Dict]:
+        """List all tables in a bucket.
+        
+        Args:
+            bucket_id: Bucket ID
+            
+        Returns:
+            List of table dictionaries
+        """
+        try:
+            return self._client.tables.list(bucket_id=bucket_id)
+        except Exception as e:
+            raise StorageError(f"Failed to list tables: {e}")
+
+    def create_table(
+        self,
+        bucket_id: str,
+        table_id: str,
+        file_path: Union[str, Path],
+        primary_key: List[str] = None
+    ) -> Dict:
+        """Create a new table from a CSV file.
+        
+        Args:
+            bucket_id: Bucket ID
+            table_id: Table ID
+            file_path: Path to CSV file
+            primary_key: Optional list of primary key columns
+            
+        Returns:
+            Created table dictionary
+        """
+        try:
+            return self._client.tables.create(
+                name=table_id,
+                bucket_id=bucket_id,
+                file_path=str(file_path),
+                primary_key=primary_key or []
+            )
+        except Exception as e:
+            raise StorageError(f"Failed to create table: {e}")
+
+    def load_table(
+        self,
+        bucket_id: str,
+        table_id: str,
+        file_path: Union[str, Path],
+        is_incremental: bool = False
+    ) -> None:
+        """Load data into a table.
+        
+        Args:
+            bucket_id: Bucket ID
+            table_id: Table ID
+            file_path: Path to CSV file
+            is_incremental: Whether to append data (True) or replace (False)
+        """
+        try:
+            self._client.tables.load(
+                table_id=f"{bucket_id}.{table_id}",
+                file_path=str(file_path),
+                is_incremental=is_incremental
+            )
+        except Exception as e:
+            raise StorageError(f"Failed to load table data: {e}")
+
+    def table_exists(self, bucket_id: str, table_id: str) -> bool:
+        """Check if a table exists.
+        
+        Args:
+            bucket_id: Bucket ID
+            table_id: Table ID
+            
+        Returns:
+            True if table exists, False otherwise
+        """
+        try:
+            tables = self.list_tables(bucket_id)
+            return any(t['id'] == f"{bucket_id}.{table_id}" for t in tables)
+        except Exception:
+            return False

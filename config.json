@@ -1,0 +1,27 @@
+{
+    "mappings": [
+        {
+            "file_path": "/Users/padak/Downloads/kbc-daemon/simple.csv",
+            "bucket_id": "in.c-padak",
+            "table_id": "simple",
+            "sync_mode": "incremental",
+            "enabled": true,
+            "options": {
+                "primary_key": [
+                    "id"
+                ]
+            }
+        }
+    ],
+    "default_settings": {
+        "watched_directory": "/Users/padak/Downloads/kbc-daemon/",
+        "log_level": "INFO",
+        "log_file": "daemon.log",
+        "log_dir": "logs",
+        "compression_threshold_mb": 50,
+        "max_retries": 3,
+        "initial_retry_delay": 1.0,
+        "max_retry_delay": 30.0,
+        "retry_backoff": 2.0
+    }
+}
