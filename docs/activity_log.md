@@ -1,101 +1,91 @@
-# Keboola Storage Daemon - Development Plan
+# Activity Log
 
-## Phase 1: Project Setup and Basic Infrastructure
-1. [x] Initialize project structure
-   - [x] Create basic folder structure
-   - [x] Set up Python virtual environment
-   - [x] Create initial requirements.txt with base dependencies
-   - [x] Set up .gitignore
+## Version 1 Development (Completed)
+- [x] Basic daemon functionality
+  - [x] File system monitoring with watchdog
+  - [x] CSV file detection and processing
+  - [x] Basic Keboola Storage integration
 
-2. [x] Configuration Management
-   - [x] Implement config loader (supporting both JSON and YAML)
-   - [x] Set up .env handling for API tokens
-   - [x] Create sample configuration files
+- [x] Core Features
+  - [x] Environment configuration (.env)
+  - [x] Bucket/table management
+  - [x] Full load implementation
+  - [x] Incremental load support
+  - [x] Status bar app integration
 
-3. [x] Logging System
-   - [x] Implement file-based logging with rotation (100MB limit)
-   - [x] Set up log formatting
-   - [x] Add basic logging utilities
+## Version 2 Development (In Progress)
 
-4. [x] Docker Setup
-   - [x] Create Dockerfile using lightweight base image
-   - [x] Set up volume mounting for watched directory
-   - [x] Configure logging volume
+### Phase 1: Core Functionality
+#### Configuration Management
+- [ ] Split configuration
+  - [ ] Move sensitive data to .env
+  - [ ] Create config.json structure
+  - [ ] Implement config file handling
+- [ ] CLI Implementation
+  - [ ] Basic config commands (init, list)
+  - [ ] Mapping management (add, edit, delete)
+  - [ ] Configuration validation
 
-## Phase 2: Core Functionality - File System Monitoring
-1. [x] Implement Directory Watcher
-   - [x] Set up watchdog observer
-   - [x] Implement event handlers for:
-     - [x] Directory creation
-     - [x] File creation
-     - [x] File modification
+#### Storage API Integration
+- [ ] Enhanced API Support
+  - [ ] Fetch and list all buckets
+  - [ ] Fetch and list all tables
+  - [ ] Manage streaming endpoints
+- [ ] Table Management
+  - [ ] File-to-table mapping
+  - [ ] Sync mode configuration
+  - [ ] Streaming endpoint setup
 
-2. [x] CSV File Processing
-   - [x] Implement CSV dialect detection
-   - [x] Add UTF-8 validation
-   - [x] Create header validation logic
-   - [x] Implement gzip compression for files >50MB
+#### Monitoring Modes
+- [ ] Full Load Mode
+  - [ ] Monitor specific files
+  - [ ] Header validation
+  - [ ] Full table updates
+- [ ] Incremental Mode
+  - [ ] Append detection
+  - [ ] Line tracking
+  - [ ] Deletion handling
+- [ ] Streaming Mode
+  - [ ] TXT file support
+  - [ ] HTTP POST implementation
+  - [ ] Basic error handling
 
-## Phase 3: Keboola Integration
-1. [x] Storage Client Implementation
-   - [x] Set up Keboola SDK integration
-   - [x] Implement bucket management
-   - [x] Create table operations wrapper
+### Phase 2: UI Integration
+- [ ] Status Bar Updates
+  - [ ] Configuration menu
+  - [ ] Mapping management
+  - [ ] Status indicators
+- [ ] Configuration Interface
+  - [ ] Table/bucket selection
+  - [ ] File mapping setup
+  - [ ] Mode selection UI
 
-2. [x] Data Upload Logic
-   - [x] Implement initial table creation
-   - [x] Add full load table update
-   - [x] Handle compressed file uploads
-   - [x] Implement CSV import with proper dialect settings
+## Testing & Documentation
+- [ ] Unit Tests
+  - [ ] Configuration management
+  - [ ] API integration
+  - [ ] Streaming functionality
+- [ ] Documentation
+  - [ ] CLI command reference
+  - [ ] Configuration guide
+  - [ ] API integration details
 
-## Phase 4: Error Handling and Robustness
-1. [x] Implement Retry Mechanism
-   - [x] Add exponential backoff for API calls
-   - [x] Implement proper error catching
-   - [x] Add detailed error logging
+## Current Focus
+- Implementing configuration split (.env + config.json)
+- Developing CLI commands for configuration management
+- Adding support for streaming mode with TXT files
 
-2. [x] Edge Cases Handling
-   - [x] Handle invalid CSV files
-   - [x] Process header changes
-   - [x] Manage concurrent file operations
+## Next Steps
+1. Complete Phase 1 core functionality
+2. Test and validate all sync modes
+3. Begin UI integration in Phase 2
 
-## Phase 5: Final Integration and Testing
-1. [x] System Integration
-   - [x] Connect all components
-   - [x] Implement graceful shutdown
-   - [x] Add startup validation
+## Issues & Challenges
+- Need to handle file deletion detection efficiently
+- Ensure proper error handling for streaming mode
+- Design user-friendly CLI interface
 
-2. [~] Manual Testing
-   - [x] Create test plan
-   - [x] Set up test data generation
-   - [x] Create test results template
-   - [ ] Test with various CSV formats
-   - [ ] Verify bucket/table creation
-   - [ ] Test error scenarios
-   - [ ] Validate logging system
-
-## TODO (Future Enhancements)
-
-### Monitoring & Metrics
-- [ ] Add Prometheus metrics export
-- [ ] Implement health check endpoints
-- [ ] Add operational metrics (processed files, errors, etc.)
-- [ ] Create dashboard templates
-
-### Testing
-- [ ] Unit tests for core components
-- [ ] Integration tests with Keboola API
-- [ ] Mock filesystem events for testing
-- [ ] Add CI/CD pipeline
-
-### Security & Performance
-- [ ] Add file permission checks
-- [ ] Implement rate limiting
-- [ ] Add API token rotation capability
-- [ ] Performance optimization for large files
-
-### Documentation
-- [ ] API documentation
-- [ ] Deployment guide
-- [ ] Troubleshooting guide
-- [ ] Configuration reference
+## Notes
+- Starting with CLI implementation before UI
+- Focusing on TXT file streaming initially
+- Planning to add more file format support later 

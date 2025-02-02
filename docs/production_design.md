@@ -114,7 +114,133 @@ Below is a suggested project structure:
 - Maintain clear separation between configuration, business logic, and third-party API integrations.
 - Consider enhancing the system design in the future to support optional incremental loads.
 
-## 9. References
+## 9. Version 2 Development Plans
+
+### 9.1 Configuration Management
+
+#### Environment Split
+- Move to a two-file configuration approach:
+  1. `.env` file: Only sensitive data
+     - Keboola API token
+     - Keboola Stack URL
+  2. `config.json`: All other settings
+     - File-to-table mappings
+     - Synchronization modes
+     - Streaming configurations
+     - Monitoring settings
+
+#### Configuration Structure
+```json
+{
+  "mappings": [
+    {
+      "file_path": "/path/to/file",
+      "bucket_id": "in.c-bucket",
+      "table_id": "my_table",
+      "sync_mode": "full_load|incremental|streaming",
+      "enabled": true,
+      "options": {
+        "streaming_endpoint": "https://...",
+        "batch_size": 1000
+      }
+    }
+  ],
+  "default_settings": {
+    "watched_directory": "/path/to/watch",
+    "log_level": "INFO",
+    "log_file": "daemon.log"
+  }
+}
+```
+
+### 9.2 Implementation Phases
+
+#### Phase 1: Core Functionality
+1. **Configuration Management**
+   - Implement config file handling
+   - Add CLI commands for configuration
+   - Support basic mapping setup
+
+2. **Storage API Integration**
+   - Fetch buckets and tables list
+   - Implement table existence check
+   - Add streaming endpoint management
+
+3. **Monitoring Modes**
+   - Full load implementation
+   - Incremental load with append detection
+   - Basic streaming support for TXT files
+
+#### Phase 2: UI Integration
+1. **Status Bar Extensions**
+   - Add configuration menu items
+   - Implement mapping management
+   - Show sync status per mapping
+
+2. **Configuration Interface**
+   - Table/bucket selection
+   - File mapping setup
+   - Sync mode selection
+
+### 9.3 Technical Details
+
+#### Streaming Implementation
+- Use simple HTTP POST for TXT files
+- No initial parsing/transformation
+- Basic error handling and retries
+- Example streaming code:
+```python
+def stream_data(endpoint_url: str, new_data: str):
+    """Stream new data to Keboola endpoint."""
+    try:
+        response = requests.post(
+            endpoint_url,
+            data=new_data,
+            headers={'Content-Type': 'text/plain'}
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Streaming failed: {e}")
+```
+
+#### CLI Configuration Commands
+```bash
+# Initial setup
+kbc-daemon config init
+
+# Add new mapping
+kbc-daemon config add-mapping \
+  --file /path/to/file \
+  --bucket in.c-bucket \
+  --table my_table \
+  --mode streaming
+
+# List mappings
+kbc-daemon config list
+
+# Edit mapping
+kbc-daemon config edit-mapping <mapping_id>
+```
+
+### 9.4 Considerations
+
+#### Error Handling
+- File access errors
+- API communication failures
+- Configuration validation
+- Streaming retries
+
+#### Performance
+- Efficient file change detection
+- Minimal memory footprint for streaming
+- Quick configuration access
+
+#### Security
+- Secure storage of endpoints
+- Token protection
+- Input validation
+
+## 10. References
 
 - [Keboola Storage API Documentation](https://keboola.docs.apiary.io/#)
 - [Keboola Python SDK Documentation](https://developers.keboola.com/integrate/storage/python-client/)
