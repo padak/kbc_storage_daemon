@@ -31,7 +31,6 @@ env/
 .vscode/
 *.swp
 *.swo
-.cursorrules
 
 # Build
 *.spec
